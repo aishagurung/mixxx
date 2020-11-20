@@ -15,7 +15,6 @@
 *                                                                         *
 ***************************************************************************/
 
-#include <QDesktopWidget>
 #include <QDialog>
 #include <QEvent>
 #include <QScrollArea>
@@ -62,12 +61,12 @@
 #include "preferences/dialog/dlgprefmodplug.h"
 #endif
 
-#include "mixxx.h"
 #include "controllers/controllermanager.h"
-#include "skin/skinloader.h"
 #include "library/library.h"
 #include "library/trackcollectionmanager.h"
-#include "util/compatibility.h"
+#include "mixxx.h"
+#include "skin/skinloader.h"
+#include "util/widgethelper.h"
 
 DlgPreferences::DlgPreferences(MixxxMainWindow* mixxx, SkinLoader* pSkinLoader, SoundManager* soundman, PlayerManager* pPlayerManager, ControllerManager* controllers, VinylControlManager* pVCManager, LV2Backend* pLV2Backend, EffectsManager* pEffectsManager, SettingsManager* pSettingsManager, Library* pLibrary)
         : m_allPages(),
@@ -79,8 +78,10 @@ DlgPreferences::DlgPreferences(MixxxMainWindow* mixxx, SkinLoader* pSkinLoader, 
     setupUi(this);
     contentsTreeWidget->setHeaderHidden(true);
 
-    connect(buttonBox, SIGNAL(clicked(QAbstractButton*)),
-            this, SLOT(slotButtonPressed(QAbstractButton*)));
+    connect(buttonBox,
+            QOverload<QAbstractButton*>::of(&QDialogButtonBox::clicked),
+            this,
+            &DlgPreferences::slotButtonPressed);
 
     connect(contentsTreeWidget,
             &QTreeWidget::currentItemChanged,
@@ -191,7 +192,8 @@ DlgPreferences::DlgPreferences(MixxxMainWindow* mixxx, SkinLoader* pSkinLoader, 
 #endif
 
     // Find accept and apply buttons
-    for (QAbstractButton* button : buttonBox->buttons()) {
+    const auto buttons = buttonBox->buttons();
+    for (QAbstractButton* button : buttons) {
         QDialogButtonBox::ButtonRole role = buttonBox->buttonRole(button);
         if (role == QDialogButtonBox::ButtonRole::ApplyRole) {
             m_pApplyButton = button;
@@ -255,7 +257,7 @@ void DlgPreferences::changePage(QTreeWidgetItem* current, QTreeWidgetItem* previ
         return;
     }
 
-    for (PreferencesPage page : m_allPages) {
+    for (PreferencesPage page : qAsConst(m_allPages)) {
         if (current == page.pTreeItem) {
             switchToPage(page.pDlg);
             break;
@@ -306,15 +308,16 @@ void DlgPreferences::onShow() {
     int newX = m_geometry[0].toInt();
     int newY = m_geometry[1].toInt();
 
-    const QScreen* primaryScreen = getPrimaryScreen();
+    const QScreen* const pScreen = mixxx::widgethelper::getScreen(*this);
     QSize screenSpace;
-    if (primaryScreen) {
-        screenSpace = primaryScreen->geometry().size();
-    } else {
+    VERIFY_OR_DEBUG_ASSERT(pScreen) {
         qWarning() << "Assuming screen size of 800x600px.";
         screenSpace = QSize(800, 600);
     }
-    newX = std::max(0, std::min(newX, screenSpace.width()- m_geometry[2].toInt()));
+    else {
+        screenSpace = pScreen->size();
+    }
+    newX = std::max(0, std::min(newX, screenSpace.width() - m_geometry[2].toInt()));
     newY = std::max(0, std::min(newY, screenSpace.height() - m_geometry[3].toInt()));
     m_geometry[0] = QString::number(newX);
     m_geometry[1] = QString::number(newY);
@@ -380,13 +383,16 @@ void DlgPreferences::slotButtonPressed(QAbstractButton* pButton) {
 }
 
 void DlgPreferences::addPageWidget(PreferencesPage page) {
-    connect(this, SIGNAL(showDlg()), page.pDlg, SLOT(slotShow()));
-    connect(this, SIGNAL(closeDlg()), page.pDlg, SLOT(slotHide()));
-    connect(this, SIGNAL(showDlg()), page.pDlg, SLOT(slotUpdate()));
+    connect(this, &DlgPreferences::showDlg, page.pDlg, &DlgPreferencePage::slotShow);
+    connect(this, &DlgPreferences::closeDlg, page.pDlg, &DlgPreferencePage::slotHide);
+    connect(this, &DlgPreferences::showDlg, page.pDlg, &DlgPreferencePage::slotUpdate);
 
-    connect(this, SIGNAL(applyPreferences()), page.pDlg, SLOT(slotApply()));
-    connect(this, SIGNAL(cancelPreferences()), page.pDlg, SLOT(slotCancel()));
-    connect(this, SIGNAL(resetToDefaults()), page.pDlg, SLOT(slotResetToDefaults()));
+    connect(this, &DlgPreferences::applyPreferences, page.pDlg, &DlgPreferencePage::slotApply);
+    connect(this, &DlgPreferences::cancelPreferences, page.pDlg, &DlgPreferencePage::slotCancel);
+    connect(this,
+            &DlgPreferences::resetToDefaults,
+            page.pDlg,
+            &DlgPreferencePage::slotResetToDefaults);
 
     QScrollArea* sa = new QScrollArea(pagesWidget);
     sa->setWidgetResizable(true);
@@ -412,7 +418,7 @@ DlgPreferencePage* DlgPreferences::currentPage() {
         }
         pObject = children[0];
     }
-    return dynamic_cast<DlgPreferencePage*>(pObject);
+    return qobject_cast<DlgPreferencePage*>(pObject);
 }
 
 void DlgPreferences::removePageWidget(DlgPreferencePage* pWidget) {
@@ -462,9 +468,12 @@ void DlgPreferences::resizeEvent(QResizeEvent* e) {
 }
 
 QRect DlgPreferences::getDefaultGeometry() {
-    QSize optimumSize;
     adjustSize();
-    optimumSize = qApp->desktop()->availableGeometry(this).size();
+    const auto* const pScreen = mixxx::widgethelper::getScreen(*this);
+    VERIFY_OR_DEBUG_ASSERT(pScreen) {
+        return QRect();
+    }
+    QSize optimumSize = pScreen->size();
 
     if (frameSize() == size()) {
         // This code is reached in Gnome 2.3
